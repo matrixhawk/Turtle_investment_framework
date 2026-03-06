@@ -3,7 +3,7 @@
     "version": "1.0",
     "project": "Turtle Investment Framework v1.0",
     "description": "Comprehensive feature list for incremental implementation. Each feature should be implementable and testable in a single Claude Code session. CRITICAL: It is unacceptable to remove or edit tests because this could lead to missing or buggy functionality. Only mark a feature as passes=true after its tests pass.",
-    "total_features": 78,
+    "total_features": 89,
     "categories": [
       "infrastructure",
       "phase0_pdf_download",
@@ -385,69 +385,77 @@
     {
       "id": 31,
       "category": "phase1b_websearch",
-      "description": "Update Phase 1 prompt: remove script-covered sections, keep Agent tasks",
+      "description": "Phase 1B prompt: role=数据采集专员, scope=§7/§8/§10/§13, references §1-§6 as tushare-generated, forbids analysis",
       "steps": [
-        "Edit prompts/phase1_数据采集.md to remove sections 1-6, 9, 11, 12",
-        "Keep sections 7, 8, 10 (management, industry, MD&A)",
-        "Add instruction: read data_pack_market.md first, fill missing sections",
-        "Verify: prompt contains only Agent-required sections"
+        "Verify prompt role is 数据采集専員",
+        "Verify agent tasks are §7, §8, §10, §13",
+        "Verify §1-§6 referenced as tushare-generated",
+        "Verify analysis/valuation forbidden",
+        "Tests in test_phase1b_prompt.py::TestFeature31RoleAndScope"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 32,
       "category": "phase1b_websearch",
-      "description": "Section 5 (Rf): WebSearch for risk-free rate",
+      "description": "Rf (§14) handled by tushare_collector.py, not WebSearch — prompt does not instruct agent to search for risk-free rate",
       "steps": [
-        "Add search queries for A-share Rf: '中国十年期国债收益率 最新'",
-        "Add fallback query: 'China 10 year government bond yield'",
-        "Verify: prompt contains Rf search instructions"
+        "Verify §14 listed in tushare-generated sections",
+        "Verify no WebSearch instructions for Rf/国債収益率",
+        "Tests in test_phase1b_prompt.py::TestFeature32RiskFreeRate"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 33,
       "category": "phase1b_websearch",
-      "description": "Section 7 (rest): Management and governance WebSearch queries",
+      "description": "§7 management/governance: 8 search items, tushare data notes for items 1/4/7/8, search templates",
       "steps": [
-        "Note top10_holders and audit come from script",
-        "Keep WebSearch for: CEO/CFO tenure, fraud, pledge/reduction, buyback",
-        "Add search query templates with {company_name} placeholders"
+        "Verify 8 search items in §7 table",
+        "Verify notes about tushare structured data",
+        "Verify search keyword templates with {公司名}",
+        "Tests in test_phase1b_prompt.py::TestFeature33Section7"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 34,
       "category": "phase1b_websearch",
-      "description": "Section 8: Industry and competition WebSearch queries",
+      "description": "§8 industry/competition: competitor/regulation/cycle queries, §8.4 trigger condition for raw material prices",
       "steps": [
-        "Update prompt with search query templates",
-        "Include conditional 8.4 (raw milk prices for dairy)",
-        "Add trigger condition based on industry classification"
+        "Verify competitor search query",
+        "Verify regulation search query",
+        "Verify cycle search query",
+        "Verify §8.4 trigger condition",
+        "Tests in test_phase1b_prompt.py::TestFeature34Section8"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 35,
       "category": "phase1b_websearch",
-      "description": "Section 10: MD&A summary WebSearch queries",
+      "description": "§10 MD&A: 4 subsections (经営回顧/前瞻指引/資本配置/風険因素), bilingual search queries",
       "steps": [
-        "Update with bilingual search queries",
-        "4 targets: operating review, guidance, capital allocation, risk factors",
-        "Each limited to 200 chars of original text"
+        "Verify 4 subsections present",
+        "Verify bilingual (Chinese + English) search keywords",
+        "Tests in test_phase1b_prompt.py::TestFeature35Section10"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 36,
       "category": "phase1b_websearch",
-      "description": "Section 13: Agent-generated warnings appended to script warnings",
+      "description": "§13 warnings: WarningsCollector wired into assemble_data_pack(), §13.1 auto-detect + §13.2 agent placeholder, merge instruction in prompt",
       "steps": [
-        "Instruct Agent to READ existing section 13",
-        "Append new warnings from WebSearch findings",
-        "Do NOT overwrite script-generated warnings"
+        "Wire WarningsCollector into assemble_data_pack() §13",
+        "Output §13.1 脚本自動検測 with auto-warnings",
+        "Output §13.2 Agent WebSearch 補充 placeholder",
+        "Fix prompt line 140: 附録A → §13.1",
+        "Update coordinator.md: remove 附録A references",
+        "Tests in test_tushare_client.py::TestAssembleDataPackWarnings",
+        "Tests in test_phase1b_prompt.py::TestFeature36Section13"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 37,
@@ -459,7 +467,7 @@
         "Handle encrypted and scan-only PDFs",
         "Write test: verify page count and error handling"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 38,
@@ -470,7 +478,7 @@
         "Include simplified Chinese, traditional Chinese, and English keywords",
         "Write test: verify all 5 sections have >= 3 keywords each"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 39,
@@ -482,7 +490,7 @@
         "Return dict: {section_id: [matched_page_numbers]}",
         "Write test: mock pages with keywords, verify detection"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 40,
@@ -494,7 +502,7 @@
         "Truncate at sentence boundary",
         "Write test: verify 3-page combination and truncation"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 41,
@@ -505,7 +513,7 @@
         "JSON: {P2: text|null, P3: ..., metadata: {pdf_path, total_pages, time, count}}",
         "Write test: verify JSON is valid and null for unfound sections"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 42,
@@ -517,7 +525,7 @@
         "Handle errors: PDF not found, too small, no sections found",
         "Write test: end-to-end with mock pipeline"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 43,
@@ -527,7 +535,7 @@
         "Add traditional Chinese variants to SECTION_KEYWORDS",
         "Write test: verify traditional Chinese keywords match"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 44,
@@ -539,7 +547,7 @@
         "Add pymupdf to requirements as optional",
         "Write test: verify garbled text detection heuristic"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 45,
@@ -550,7 +558,7 @@
         "Convert to markdown format within extracted text",
         "Write test: verify table detection"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 46,
@@ -560,7 +568,7 @@
         "Score by heading context, page position (last 30%), penalize TOC",
         "Write test: verify scoring ranks notes > TOC"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 47,
@@ -572,7 +580,7 @@
         "Verify: extracted text contains financial terms",
         "Record results in claude-progress.txt"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": 48,
@@ -931,6 +939,149 @@
         "Create skills/turtle-analysis/SKILL.md",
         "Reference prompts/coordinator.md as entry point",
         "Declare dependency on snowball-report-downloader"
+      ],
+      "passes": false
+    },
+    {
+      "id": 79,
+      "category": "phase1a_tushare",
+      "description": "Expand income statement: add 11 fields (finance_exp, income_tax, total_profit, invest_income, non_oper_income/exp, impairment losses, etc.) and reorder to match accounting standards",
+      "steps": [
+        "Add 11 new fields to get_income() _safe_call",
+        "Reorder fields to accounting standards order",
+        "Add credit_impair_loss to report_type=6 exclusions",
+        "Update income.json fixture with new fields",
+        "Add tests for new fields, order, and exclusion logic"
+      ],
+      "passes": true
+    },
+    {
+      "id": 80,
+      "category": "phase1a_tushare",
+      "description": "Expand consolidated balance sheet: add 13 fields (trad_asset, oth_cur_assets, intang_assets, cip, acct_payable, notes_payable, defer_tax_assets/liab, bond_payable, non_cur_liab_due_1y, oth_cur_liab, total_cur_assets, total_cur_liab)",
+      "steps": [
+        "Add 13 new fields to get_balance_sheet() _safe_call",
+        "Reorder fields to standard balance sheet order",
+        "Update balancesheet.json fixture with new fields",
+        "Add tests for 13 new fields and order verification"
+      ],
+      "passes": true
+    },
+    {
+      "id": 81,
+      "category": "phase1a_tushare",
+      "description": "Expand parent balance sheet: add total_hldr_eqy_exc_min_int, bond_payable, non_cur_liab_due_1y for holding company discount analysis",
+      "steps": [
+        "Add 3 fields to report_type=6 parent display list",
+        "Update parent display order",
+        "Add test for parent balance sheet new fields"
+      ],
+      "passes": true
+    },
+    {
+      "id": 82,
+      "category": "phase1a_tushare",
+      "description": "Expand cashflow: add 5 fields (c_pay_to_staff, c_paid_for_taxes, n_recp_disp_fiolta, receiv_tax_refund, c_recp_return_invest) and display existing c_pay_dist_dpcp_int_exp",
+      "steps": [
+        "Add 5 new fields to get_cashflow() _safe_call",
+        "Add 6 display rows to simple_fields",
+        "Update cashflow.json fixture with new fields",
+        "Add tests for new fields and values"
+      ],
+      "passes": true
+    },
+    {
+      "id": 83,
+      "category": "phase1a_tushare",
+      "description": "Expand financial indicators: add revenue_yoy, netprofit_yoy, ocfps, bps, profit_dedt for growth/quality analysis",
+      "steps": [
+        "Add 5 new fields to get_fina_indicators() _safe_call",
+        "Add growth, per-share, and quality display groups",
+        "Update fina_indicator.json fixture with new fields",
+        "Add tests for new fields and values"
+      ],
+      "passes": true
+    },
+    {
+      "id": 84,
+      "category": "phase1a_tushare",
+      "description": "New section: Risk-free rate from yc_cb (中债国债收益率曲线). Get latest 10-year government bond yield for Factor 2/4 threshold calculation",
+      "steps": [
+        "Add get_risk_free_rate() method using yc_cb endpoint",
+        "Output section 14 with date and yield",
+        "Register in assemble_data_pack()",
+        "Create yc_cb.json fixture",
+        "Add tests for output, empty data, and permission error"
+      ],
+      "passes": true
+    },
+    {
+      "id": 85,
+      "category": "phase1a_tushare",
+      "description": "New section: Share repurchase data from Tushare repurchase endpoint. Show last 3 years buyback records",
+      "steps": [
+        "Add get_repurchase(ts_code) method using repurchase endpoint",
+        "Filter to last 3 years, show amounts and summary",
+        "Register in assemble_data_pack()",
+        "Create repurchase.json fixture",
+        "Add tests for output, empty data, and permission error"
+      ],
+      "passes": true
+    },
+    {
+      "id": 86,
+      "category": "phase1a_tushare",
+      "description": "New section: Share pledge statistics from pledge_stat endpoint. Show pledge ratio for Factor 1A check #6",
+      "steps": [
+        "Add get_pledge_stat(ts_code) method using pledge_stat endpoint",
+        "Show pledge count, amounts, ratio",
+        "Register in assemble_data_pack()",
+        "Create pledge_stat.json fixture",
+        "Add tests for output, empty data, and permission error"
+      ],
+      "passes": true
+    },
+    {
+      "id": 87,
+      "category": "phase2a_pdf_preprocess",
+      "description": "MDA extraction from PDF: add MDA keywords, per-section config (buffer=3, max_chars=8000), pipeline reorder (Phase 2A parallel with Phase 1A), §10 PDF-first + WebSearch fallback",
+      "passes": true,
+      "steps": [
+        "Add MDA to SECTION_KEYWORDS with simplified + traditional Chinese keywords",
+        "Add SECTION_EXTRACT_CONFIG with per-section buffer_pages and max_chars",
+        "Update extract_section_context() to use per-section config",
+        "Update write_output() to include MDA in output sections",
+        "Update phase1_数据采集.md §10: PDF-first + WebSearch fallback",
+        "Update coordinator.md: reorder pipeline so Phase 2A runs parallel with Phase 1A before Phase 1B",
+        "Add TestMDAExtraction tests (6 tests) and update existing tests for 6 sections",
+        "Update test_phase1b_prompt.py: add test_pdf_first_instruction and test_websearch_fallback"
+      ]
+    },
+    {
+      "id": 88,
+      "category": "phase2a_pdf_preprocess",
+      "description": "SUB section in pdf_preprocessor.py: add subsidiary holdings keywords, extract config (buffer=2, max_chars=6000), output section, and 7 new tests",
+      "steps": [
+        "Add SUB keywords to SECTION_KEYWORDS (simplified + traditional Chinese)",
+        "Add SUB to SECTION_EXTRACT_CONFIG with buffer_pages=2, max_chars=6000",
+        "Update write_output() section list to include SUB (7 sections total)",
+        "Update docstrings (7 target sections)",
+        "Update existing tests for 7 sections (assertions, parametrize lists)",
+        "Add TestSUBExtraction class with 7 tests"
+      ],
+      "passes": true
+    },
+    {
+      "id": 89,
+      "category": "phase1b_websearch",
+      "description": "§9B in Phase 1B prompt: add WebSearch subsidiary identification task, update coordinator/phase2/phase3/factor1 prompts, add prompt tests",
+      "steps": [
+        "Add §9B section to phase1_数据采集.md with trigger condition and output table",
+        "Add SUB template to phase2_PDF解析.md (conditional extraction)",
+        "Update coordinator.md: 7 sections, SUB in diagram and task list",
+        "Update phase3_分析与报告.md: §9B data source references",
+        "Update factor1_资产质量与商业模式.md: Module 9 data source priority",
+        "Add TestSection9BSubsidiaries class to test_phase1b_prompt.py (4 tests)"
       ],
       "passes": false
     }
