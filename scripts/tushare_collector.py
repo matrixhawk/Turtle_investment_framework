@@ -1802,7 +1802,7 @@ class TushareClient:
         lines = [format_header(3, "17.9 因子4·业绩下滑敏感性"), ""]
         lines.append(f"> AA（真实可支配现金结余）= {format_number(aa)} 百万元，"
                      f"M = {m_pct:.2f}%，O = {format_number(o_val)}，"
-                     f"II = {ii:.2f}%，市值 = {format_number(mkt_cap / 1e6)} 百万元")
+                     f"II = {ii:.2f}%，市值 = {format_number(mkt_cap)} 百万元")
         lines.append("")
 
         # Table 1: cumulative 10%/year decline over 1-3 years
@@ -1920,6 +1920,28 @@ class TushareClient:
         table = format_table(headers, rows,
                              alignments=["l"] + ["r"] * 5)
         lines.append(table)
+
+        # Null-value warnings for AR / contract_liab
+        warnings = []
+        for year, s, t, u, tcr, ratio in results:
+            if year in bs_by_year:
+                bs_cur = bs_by_year[year]
+                prior_year = str(int(year) - 1)
+                bs_prev = bs_by_year.get(prior_year)
+                if bs_prev is not None:
+                    ar_cur = self._safe_float(bs_cur.get("accounts_receiv"))
+                    ar_prev = self._safe_float(bs_prev.get("accounts_receiv"))
+                    if ar_cur is None and ar_prev is None and s > 0:
+                        warnings.append(f"{year}: accounts_receiv 为空，AR变动=0 可能高估现金收入")
+                    cl_cur = self._safe_float(bs_cur.get("contract_liab"))
+                    cl_prev = self._safe_float(bs_prev.get("contract_liab"))
+                    if cl_cur is None and cl_prev is None and s > 0:
+                        warnings.append(f"{year}: contract_liab 为空，CL变动=0 可能影响现金收入")
+        if warnings:
+            lines.append("")
+            for wm in warnings:
+                lines.append(f"> ⚠️ {wm}")
+
         return "\n".join(lines)
 
     def _compute_factor3_step4(self) -> str | None:
@@ -1973,8 +1995,18 @@ class TushareClient:
             ap_change = ap_cur - ap_prev
             w1 = oper_cost + max(0, -ap_change)
 
-            # W2: employee = c_pay_to_staff
-            w2 = self._safe_float(cf.get("c_pay_to_staff")) or 0
+            # W2: employee = c_pay_to_staff (fallback to SGA if null)
+            w2_raw = self._safe_float(cf.get("c_pay_to_staff"))
+            w2_is_fallback = False
+            if w2_raw is None or w2_raw == 0:
+                # Fallback: SGA from income statement as proxy
+                selling = self._safe_float(inc.get("sell_exp")) or 0
+                admin = self._safe_float(inc.get("admin_exp")) or 0
+                rd = self._safe_float(inc.get("rd_exp")) or 0
+                w2 = selling + admin + rd
+                w2_is_fallback = w2 > 0  # only mark fallback if SGA produced a value
+            else:
+                w2 = w2_raw
 
             # W3: cash tax = income_tax - (DTA_change - DTL_change)
             income_tax = self._safe_float(inc.get("income_tax")) or 0
@@ -1989,7 +2021,7 @@ class TushareClient:
             w4 = self._safe_float(inc.get("finance_exp")) or 0
 
             w = w1 + w2 + w3 + w4
-            results.append((year, w1, w2, w3, w4, w))
+            results.append((year, w1, w2, w3, w4, w, w2_is_fallback))
             w_total_store[year] = w
 
         if not results:
@@ -2003,11 +2035,16 @@ class TushareClient:
 
         headers = ["年份", "W1 供应商", "W2 员工", "W3 现金税", "W4 利息", "W 合计"]
         rows = []
-        for year, w1, w2, w3, w4, w in results:
+        has_w2_fallback = False
+        for year, w1, w2, w3, w4, w, w2_fb in results:
+            w2_display = format_number(w2)
+            if w2_fb:
+                w2_display += "†"
+                has_w2_fallback = True
             rows.append([
                 year,
                 format_number(w1),
-                format_number(w2),
+                w2_display,
                 format_number(w3),
                 format_number(w4),
                 format_number(w),
@@ -2015,6 +2052,28 @@ class TushareClient:
         table = format_table(headers, rows,
                              alignments=["l"] + ["r"] * 5)
         lines.append(table)
+
+        # Footnote for W2 fallback
+        if has_w2_fallback:
+            lines.append("")
+            lines.append("> † W2: c_pay_to_staff 为空，已用利润表 SGA（销售+管理+研发费用）替代，偏保守。")
+
+        # Null-value warnings
+        warnings = []
+        for year, w1, w2, w3, w4, w, w2_fb in results:
+            inc = inc_by_year.get(year)
+            cf = cf_by_year.get(year)
+            if inc is not None:
+                if (self._safe_float(inc.get("oper_cost")) or 0) == 0:
+                    warnings.append(f"{year}: oper_cost 为空，W1 可能偏低")
+                total_profit = self._safe_float(inc.get("total_profit")) or 0
+                if (self._safe_float(inc.get("income_tax")) or 0) == 0 and total_profit > 0:
+                    warnings.append(f"{year}: income_tax 为空但利润总额>0，W3 可能偏低")
+        if warnings:
+            lines.append("")
+            for wm in warnings:
+                lines.append(f"> ⚠️ {wm}")
+
         return "\n".join(lines)
 
     def _compute_factor3_sensitivity_base(self) -> str | None:
@@ -2165,6 +2224,36 @@ class TushareClient:
         for w_msg in lambda_warnings:
             lines.append(f"  ⚠️ {w_msg}")
 
+        # Capex null-value warnings
+        capex_warnings = []
+        for _, r in cf_df.iterrows():
+            year = str(r["end_date"])[:4]
+            if year in common_years:
+                if self._safe_float(r.get("c_pay_acq_const_fiolta")) is None:
+                    capex_warnings.append(f"{year}: capex（c_pay_acq_const_fiolta）为空，基准结余可能偏高")
+        if capex_warnings:
+            lines.append("")
+            for wm in capex_warnings:
+                lines.append(f"> ⚠️ {wm}")
+
+        # AA vs OCF cross-validation
+        ocf_values = []
+        for _, r in cf_df.iterrows():
+            year = str(r["end_date"])[:4]
+            if year in [s[0] for s in surplus_data]:
+                ocf = self._safe_float(r.get("n_cashflow_act"))
+                if ocf is not None:
+                    ocf_values.append(ocf)
+        if ocf_values:
+            ocf_avg = sum(ocf_values) / len(ocf_values)
+            if aa_selected > 0 and ocf_avg > 0 and aa_selected / ocf_avg > 2.0:
+                lines.append("")
+                lines.append(
+                    f"> ⚠️ AA/OCF = {aa_selected / ocf_avg:.1f}x，"
+                    f"基准结余远超经营现金流（均值 {format_number(ocf_avg)} 百万元），"
+                    f"可能存在数据缺失导致 W 偏低"
+                )
+
         return "\n".join(lines)
 
     def compute_derived_metrics(self, ts_code: str) -> str:
@@ -2304,28 +2393,23 @@ class TushareClient:
         # §13 Warnings: auto-detect + agent placeholder
         wc = WarningsCollector()
         try:
-            # Check missing data for core financial statements
+            # Check missing data + YoY anomaly for core financial statements
             for label, api, fields in [
-                ("合并利润表", "income", "ts_code,end_date,revenue"),
+                ("合并利润表", "income", "ts_code,end_date,revenue,n_income_attr_p"),
                 ("合并资产负债表", "balancesheet", "ts_code,end_date,total_assets"),
                 ("现金流量表", "cashflow", "ts_code,end_date,n_cashflow_act"),
             ]:
                 df = self._safe_call(api, ts_code=ts_code, fields=fields)
                 wc.check_missing_data(label, df)
-                # YoY checks for key metrics
-                if not df.empty:
-                    col = fields.split(",")[-1]
-                    if col in df.columns:
-                        vals = df[col].tolist()
-                        wc.check_yoy_change(label, col, vals)
-
-            # Check revenue and net income YoY from income statement
-            inc_df = self._safe_call("income", ts_code=ts_code,
-                                     fields="ts_code,end_date,revenue,n_income_attr_p")
-            if not inc_df.empty:
-                for col in ["revenue", "n_income_attr_p"]:
-                    if col in inc_df.columns:
-                        wc.check_yoy_change("合并利润表", col, inc_df[col].tolist())
+                if not df.empty and "end_date" in df.columns:
+                    # Filter to annual reports only (end_date ending in "1231")
+                    annual = df[df["end_date"].astype(str).str.endswith("1231")].copy()
+                    annual = annual.sort_values("end_date", ascending=False)
+                    if not annual.empty:
+                        dates = annual["end_date"].astype(str).str[:4].tolist()
+                        for col in fields.split(",")[2:]:  # skip ts_code, end_date
+                            if col in annual.columns:
+                                wc.check_yoy_change(label, col, annual[col].tolist(), dates=dates)
 
             # Audit risk check
             audit_df = self._safe_call("fina_audit", ts_code=ts_code,
@@ -2391,7 +2475,8 @@ class WarningsCollector:
             })
 
     def check_yoy_change(self, section_name: str, field_name: str,
-                         values: list, threshold: float = 3.0):
+                         values: list, threshold: float = 3.0,
+                         dates: list = None):
         """Warn if year-over-year change exceeds threshold (e.g., 300%)."""
         for i in range(len(values) - 1):
             curr, prev = values[i], values[i + 1]
@@ -2399,11 +2484,14 @@ class WarningsCollector:
                 try:
                     change = abs(float(curr) / float(prev) - 1)
                     if change > threshold:
+                        period = ""
+                        if dates and i + 1 < len(dates):
+                            period = f"{dates[i+1]}→{dates[i]} "
                         self.warnings.append({
                             "type": "YOY_ANOMALY",
                             "severity": "高",
                             "message": f"{section_name}/{field_name}: "
-                                       f"同比变化 {change*100:.0f}% 超过 {threshold*100:.0f}% 阈值",
+                                       f"{period}同比变化 {change*100:.0f}% 超过 {threshold*100:.0f}% 阈值",
                         })
                 except (ValueError, ZeroDivisionError):
                     pass
