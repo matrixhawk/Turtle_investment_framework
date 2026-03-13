@@ -285,6 +285,14 @@ class TestFactor2Inputs:
         # Rf ≈ 2.315%, so II = max(5%, 5.315%) = 5.315%
         assert "5.3" in result
 
+    def test_threshold_us(self):
+        """II for US stock: max(4%, Rf+2%)."""
+        client = _make_client_with_store()
+        result = client._compute_factor2_inputs("AAPL.US")
+        # Rf ≈ 2.315%, so II = max(4%, 4.315%) = 4.315%
+        assert "4.3" in result
+        assert "美股" in result
+
     def test_oe_base(self):
         """OE_base should reference G=1.0."""
         client = _make_client_with_store()
@@ -779,3 +787,72 @@ class TestFactor4EVBaseline:
         client = _make_client_with_ev_store()
         result = client.compute_derived_metrics("600887.SH")
         assert "17.8" in result
+
+
+# ===== Non-calendar fiscal year tests =====
+
+class TestGetAnnualDfNonCalendarFY:
+    """Tests for _get_annual_df with non-calendar fiscal years."""
+
+    def test_get_annual_df_september_fy(self):
+        """With _fy_end_month=9, only September dates should be annual."""
+        client = _make_client()
+        client._fy_end_month = 9
+        client._store["income"] = pd.DataFrame([
+            {"end_date": "20240928", "revenue": 100},
+            {"end_date": "20230930", "revenue": 90},
+            {"end_date": "20220924", "revenue": 80},
+            {"end_date": "20250331", "revenue": 50},  # interim
+        ])
+        annual = client._get_annual_df("income")
+        assert len(annual) == 3
+        for _, r in annual.iterrows():
+            assert str(r["end_date"])[4:6] == "09"
+
+    def test_get_annual_df_default_fy(self):
+        """Default _fy_end_month=12 should filter to 1231."""
+        client = _make_client()
+        client._store["income"] = pd.DataFrame([
+            {"end_date": "20241231", "revenue": 100},
+            {"end_date": "20240930", "revenue": 80},
+            {"end_date": "20231231", "revenue": 90},
+        ])
+        annual = client._get_annual_df("income")
+        assert len(annual) == 2
+        for _, r in annual.iterrows():
+            assert str(r["end_date"]).endswith("1231")
+
+
+class TestUnitLabelsInDerivedMetrics:
+    """Tests for currency-aware unit labels in §17."""
+
+    def test_unit_label_in_financial_trends_usd(self):
+        """§17.1 should use 百万美元 for US stocks."""
+        client = _make_client()
+        client._currency = "USD"
+        client._fy_end_month = 9
+        # Populate store with minimal data
+        client._store["income"] = pd.DataFrame([
+            {"end_date": "20240928", "revenue": 100e9, "n_income_attr_p": 20e9},
+            {"end_date": "20230930", "revenue": 90e9, "n_income_attr_p": 18e9},
+            {"end_date": "20220924", "revenue": 80e9, "n_income_attr_p": 15e9},
+            {"end_date": "20210925", "revenue": 70e9, "n_income_attr_p": 12e9},
+            {"end_date": "20200926", "revenue": 60e9, "n_income_attr_p": 10e9},
+        ])
+        client._store["balance_sheet"] = pd.DataFrame([
+            {"end_date": "20240928", "st_borr": 1e9, "lt_borr": 5e9, "bond_payable": 0,
+             "non_cur_liab_due_1y": 0, "money_cap": 10e9, "trad_asset": 0, "total_assets": 100e9},
+            {"end_date": "20230930", "st_borr": 1e9, "lt_borr": 5e9, "bond_payable": 0,
+             "non_cur_liab_due_1y": 0, "money_cap": 10e9, "trad_asset": 0, "total_assets": 95e9},
+        ])
+        client._store["cashflow"] = pd.DataFrame([
+            {"end_date": "20240928", "n_cashflow_act": 30e9, "c_pay_acq_const_fiolta": 5e9,
+             "c_pay_dist_dpcp_int_exp": 2e9},
+            {"end_date": "20230930", "n_cashflow_act": 28e9, "c_pay_acq_const_fiolta": 4e9,
+             "c_pay_dist_dpcp_int_exp": 1.5e9},
+        ])
+        client._store["dividends"] = pd.DataFrame(columns=["end_date", "cash_div_tax"])
+        result = client._compute_financial_trends()
+        assert result is not None
+        assert "百万美元" in result
+        assert "百万元" not in result.replace("百万美元", "")

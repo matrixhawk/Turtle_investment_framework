@@ -7,7 +7,7 @@
 
 ## v1.0 变更摘要（vs v0.16_alpha）
 
-- **新增 Phase 0**：集成 `snowball-report-downloader` 插件，自动搜索并下载年报 PDF
+- **新增 Phase 0**：内置 `/download-report` 命令，自动搜索并下载年报 PDF
 - **Phase 1 拆分两步**：Step A = `tushare_collector.py`（Python 脚本采集结构化数据）+ Step B = Agent WebSearch（非结构化信息）
 - **Phase 2 拆分两步**：Step A = `pdf_preprocessor.py`（Python 关键词定位 7 章节：P2-P13 + MDA + SUB）+ Step B = Agent 精提取（5+1 项 footnote 数据，SUB 条件触发）
 - **Pipeline 重排**：Phase 1A + Phase 2A 并行运行；Phase 1B 在 Phase 1A 完成后立即启动（§10 到达时检查 pdf_sections.json）
@@ -25,7 +25,7 @@
 
 | 输入项 | 示例 | 必需？ |
 |--------|------|--------|
-| 股票代码或名称 | `600887` / `伊利股份` / `0001.HK` / `长和` | 必需 |
+| 股票代码或名称 | `600887` / `伊利股份` / `0001.HK` / `长和` / `AAPL` / `AAPL.US` | 必需 |
 | 持股渠道 | `港股通` / `直接` / `美股券商` | 可选（未指定则触发 AskUserQuestion） |
 | PDF 年报文件 | 用户上传的 `.pdf` 文件 | 可选（未提供则触发 Phase 0 自动下载） |
 
@@ -33,7 +33,7 @@
 1. 从用户消息中提取股票代码/名称和持股渠道
 2. 检查是否有 PDF 文件上传（检查 `/sessions/*/mnt/uploads/` 目录中的 `.pdf` 文件）
 3. 若用户只给了公司名称没给代码，在 Phase 1 Step A 中由脚本通过 Tushare `stock_basic` 确认代码
-4. 股票代码格式化：A 股 → `XXXXXX.SH` 或 `XXXXXX.SZ`；港股 → `XXXXX.HK`
+4. 股票代码格式化：A 股 → `XXXXXX.SH` 或 `XXXXXX.SZ`；港股 → `XXXXX.HK`；美股 → `AAPL.US`
 
 ---
 
@@ -134,7 +134,7 @@ AskUserQuestion:
            ▼
 ┌─────────────────────────────────────────────────┐
 │  Phase 0：PDF 自动获取（仅当需要时）               │
-│  snowball-report-downloader Skill                │
+│  /download-report 命令                            │
 │                                                   │
 │  ⚠️ 触发条件：                                    │
 │     用户未上传 PDF + 选择了"自动下载"               │
@@ -235,8 +235,8 @@ pip install tushare pandas pdfplumber --break-system-packages
 
 ```
 # 步骤 1：下载年报（必选，仅当用户选择"自动下载"时执行）
-Skill("snowball-report-downloader:report-download")
-# 或在 Claude Code 中：/download-report {stock_code} {year} 年报
+/download-report {stock_code} {year} 年报
+# 或手动调用: python3 scripts/download_report.py --url <URL> --stock-code <code> --report-type 年报 --year <year> --save-dir {output_dir}
 # 下载目标年报 → {output_dir}/{code}_{year}_年报.pdf
 
 # 检查下载结果

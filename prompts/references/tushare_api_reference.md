@@ -1437,4 +1437,57 @@ ts_code,end_date,dps_hkd,divi_ratio
 
 ---
 
+## 美股接口
+
+### us_basic — 美股基本信息
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| ts_code | str | 股票代码 (如 AAPL) |
+| name | str | 公司名称 |
+| enname | str | 英文名称 |
+| market | str | 交易所 (NASDAQ/NYSE) |
+| list_date | str | 上市日期 |
+
+### us_daily — 美股日线行情
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| ts_code | str | 股票代码 |
+| trade_date | str | 交易日期 |
+| open/high/low/close | float | OHLC |
+| vol | float | 成交量 |
+| amount | float | 成交额 |
+| pe | float | 市盈率 |
+| pb | float | 市净率 |
+| total_mv | float | 总市值（百万美元） |
+
+### us_income — 美股利润表（行项目格式）
+格式: ts_code, end_date, ind_name, ind_value
+常见 ind_name: 营业收入, 营业成本, 毛利, 营销费用, 研发费用, 经营利润, 净利润, 归属于母公司净利润, 基本每股收益, 稀释每股收益
+
+### us_balancesheet — 美股资产负债表（行项目格式）
+格式: ts_code, end_date, ind_name, ind_value
+常见 ind_name: 现金及等价物, 应收帐款, 存货, 流动资产合计, 固定资产, 无形资产, 总资产, 应付帐款, 短期贷款, 流动负债合计, 长期贷款, 总负债, 股东权益, 少数股东权益
+
+### us_cashflow — 美股现金流量表（行项目格式）
+格式: ts_code, end_date, ind_name, ind_value
+常见 ind_name: 经营活动现金净额, 投资活动现金净额, 筹资活动现金净额, 资本支出, 折旧及摊销, 已付股息
+
+### us_fina_indicator — 美股财务指标（结构化格式）
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| ts_code | str | 股票代码 |
+| end_date | str | 报告期 |
+| roe_avg | float | 平均ROE (%) |
+| gross_profit_ratio | float | 毛利率 (%) |
+| net_profit_ratio | float | 净利率 (%) |
+| debt_asset_ratio | float | 资产负债率 (%) |
+| pe_ttm | float | PE (TTM) |
+| pb_ttm | float | PB |
+| operate_income_yoy | float | 营收同比 (%) |
+| holder_profit_yoy | float | 净利润同比 (%) |
+| bps | float | 每股净资产 (USD) |
+| total_market_cap | float | 总市值（百万美元） |
+
+---
+
 *龟龟投资策略 v1.0 | Tushare API 参考文档*

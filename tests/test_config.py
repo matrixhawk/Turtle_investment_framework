@@ -107,7 +107,7 @@ class TestValidateStockCode:
 
     def test_invalid_format(self):
         with pytest.raises(ValueError, match="Unrecognized"):
-            validate_stock_code("AAPL")
+            validate_stock_code("AAPL123")
 
     def test_empty(self):
         with pytest.raises(ValueError, match="Unrecognized"):
@@ -132,6 +132,22 @@ class TestValidateStockCode:
 
     def test_plain_hk_1digit(self):
         assert validate_stock_code("5") == "00005.HK"
+
+    # US stock codes
+    def test_us_with_suffix(self):
+        assert validate_stock_code("AAPL.US") == "AAPL.US"
+
+    def test_us_plain_ticker(self):
+        assert validate_stock_code("AAPL") == "AAPL.US"
+
+    def test_us_lowercase(self):
+        assert validate_stock_code("aapl.us") == "AAPL.US"
+
+    def test_us_5letter_ticker(self):
+        assert validate_stock_code("GOOGL") == "GOOGL.US"
+
+    def test_us_plain_lowercase(self):
+        assert validate_stock_code("nvda") == "NVDA.US"
 
 
 # --- check_local_pdf() ---

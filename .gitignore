@@ -31,6 +31,7 @@ Thumbs.db
 # Project runtime outputs
 output/*
 !output/.gitkeep
+scripts/output/
 
 # Sensitive
 .env

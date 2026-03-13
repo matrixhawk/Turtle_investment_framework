@@ -101,9 +101,17 @@ def validate_stock_code(code: str) -> str:
     if re.match(r"^\d{1,5}$", code):
         return f"{code.zfill(5)}.HK"
 
+    # Already in US format: AAPL.US
+    if re.match(r"^[A-Z]{1,5}\.US$", code):
+        return code
+
+    # Plain alphabetic ticker → US stock
+    if re.match(r"^[A-Z]{1,5}$", code):
+        return f"{code}.US"
+
     raise ValueError(
         f"Unrecognized stock code format: '{code}'. "
-        "Expected: 600887.SH, 000858.SZ, 00700.HK, or plain digits."
+        "Expected: 600887.SH, 000858.SZ, 00700.HK, AAPL.US, or plain digits."
     )
 
 

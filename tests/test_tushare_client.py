@@ -111,6 +111,110 @@ class TestCachedBasicCall:
         assert not os.path.exists(cache_file)
 
 
+class TestCachedUsDaily:
+    """Tests for _cached_us_daily bulk cache with same-day TTL."""
+
+    def test_first_call_fetches_and_caches(self, tmp_path):
+        """First call should hit API and write Parquet cache file."""
+        client = _make_client()
+        client._cache_dir = str(tmp_path)
+        bulk_df = pd.DataFrame([
+            {"ts_code": "AAPL", "trade_date": "20241231", "close": 254.49,
+             "pe": 32.5, "pb": 48.2, "total_mv": 3850000},
+            {"ts_code": "NVDA", "trade_date": "20241231", "close": 130.50,
+             "pe": 60.0, "pb": 30.0, "total_mv": 3200000},
+        ])
+        client._safe_call = MagicMock(return_value=bulk_df)
+
+        result = client._cached_us_daily(ts_code="AAPL")
+
+        client._safe_call.assert_called_once()
+        assert os.path.exists(os.path.join(str(tmp_path), "us_daily_all.parquet"))
+        assert len(result) == 1
+        assert result.iloc[0]["ts_code"] == "AAPL"
+
+    def test_second_call_uses_cache(self, tmp_path):
+        """Same-day second call should read from cache, not API."""
+        client = _make_client()
+        client._cache_dir = str(tmp_path)
+        bulk_df = pd.DataFrame([
+            {"ts_code": "AAPL", "trade_date": "20241231", "close": 254.49,
+             "pe": 32.5, "pb": 48.2, "total_mv": 3850000},
+            {"ts_code": "NVDA", "trade_date": "20241231", "close": 130.50,
+             "pe": 60.0, "pb": 30.0, "total_mv": 3200000},
+        ])
+        client._safe_call = MagicMock(return_value=bulk_df)
+
+        client._cached_us_daily(ts_code="AAPL")
+        result = client._cached_us_daily(ts_code="NVDA")
+
+        assert client._safe_call.call_count == 1  # Only one API call
+        assert len(result) == 1
+        assert result.iloc[0]["ts_code"] == "NVDA"
+
+    def test_filter_by_ts_code(self, tmp_path):
+        """Filtering by ts_code should return correct subset."""
+        client = _make_client()
+        client._cache_dir = str(tmp_path)
+        bulk_df = pd.DataFrame([
+            {"ts_code": "AAPL", "trade_date": "20241231", "close": 254.49},
+            {"ts_code": "NVDA", "trade_date": "20241231", "close": 130.50},
+            {"ts_code": "MSFT", "trade_date": "20241231", "close": 420.00},
+        ])
+        client._safe_call = MagicMock(return_value=bulk_df)
+
+        result = client._cached_us_daily(ts_code="MSFT")
+        assert len(result) == 1
+        assert result.iloc[0]["close"] == 420.00
+
+    def test_no_filter_returns_all(self, tmp_path):
+        """Calling without ts_code should return all rows."""
+        client = _make_client()
+        client._cache_dir = str(tmp_path)
+        bulk_df = pd.DataFrame([
+            {"ts_code": "AAPL", "close": 254.49},
+            {"ts_code": "NVDA", "close": 130.50},
+        ])
+        client._safe_call = MagicMock(return_value=bulk_df)
+
+        result = client._cached_us_daily()
+        assert len(result) == 2
+
+    def test_stale_cache_triggers_fresh_fetch(self, tmp_path):
+        """Cache from yesterday should trigger a new API call."""
+        client = _make_client()
+        client._cache_dir = str(tmp_path)
+        bulk_df = pd.DataFrame([
+            {"ts_code": "AAPL", "trade_date": "20241231", "close": 254.49,
+             "pe": 32.5, "pb": 48.2, "total_mv": 3850000},
+        ])
+        client._safe_call = MagicMock(return_value=bulk_df)
+
+        # First call populates cache
+        client._cached_us_daily(ts_code="AAPL")
+
+        # Age the cache file to yesterday
+        cache_file = os.path.join(str(tmp_path), "us_daily_all.parquet")
+        yesterday = time.time() - 86400
+        os.utime(cache_file, (yesterday, yesterday))
+
+        # Second call should hit API again
+        client._cached_us_daily(ts_code="AAPL")
+        assert client._safe_call.call_count == 2
+
+    def test_empty_result_not_cached(self, tmp_path):
+        """Empty API result should NOT write cache file."""
+        client = _make_client()
+        client._cache_dir = str(tmp_path)
+        client._safe_call = MagicMock(return_value=pd.DataFrame())
+
+        result = client._cached_us_daily(ts_code="AAPL")
+
+        cache_file = os.path.join(str(tmp_path), "us_daily_all.parquet")
+        assert not os.path.exists(cache_file)
+        assert result.empty
+
+
 class TestSafeCall:
     @patch("tushare_collector.ts")
     def test_successful_call(self, mock_ts):
@@ -606,7 +710,7 @@ class TestPrepareDisplayPeriods:
             {"end_date": "20211231", "revenue": 70},
             {"end_date": "20201231", "revenue": 60},
         ])
-        result_df, labels = TushareClient._prepare_display_periods(df)
+        result_df, labels = _make_client()._prepare_display_periods(df)
         assert labels == ["2024", "2023", "2022", "2021", "2020"]
         assert len(result_df) == 5
 
@@ -622,7 +726,7 @@ class TestPrepareDisplayPeriods:
             {"end_date": "20211231", "revenue": 110},
             {"end_date": "20201231", "revenue": 96},
         ])
-        result_df, labels = TushareClient._prepare_display_periods(df)
+        result_df, labels = _make_client()._prepare_display_periods(df)
         assert labels == ["2025Q3", "2025H1", "2025Q1", "2024", "2023", "2022", "2021", "2020"]
         assert len(result_df) == 8
 
@@ -633,7 +737,7 @@ class TestPrepareDisplayPeriods:
             {"end_date": "20241231", "revenue": 120},
             {"end_date": "20231231", "revenue": 112},
         ])
-        result_df, labels = TushareClient._prepare_display_periods(df)
+        result_df, labels = _make_client()._prepare_display_periods(df)
         assert labels == ["2024", "2023"]
         assert len(result_df) == 2
 
@@ -643,7 +747,7 @@ class TestPrepareDisplayPeriods:
             {"end_date": "20250630", "revenue": 62},
             {"end_date": "20241231", "revenue": 120},
         ])
-        _, labels = TushareClient._prepare_display_periods(df)
+        _, labels = _make_client()._prepare_display_periods(df)
         assert labels[0] == "2025H1"
 
     def test_q1_label(self):
@@ -652,7 +756,7 @@ class TestPrepareDisplayPeriods:
             {"end_date": "20250331", "revenue": 31},
             {"end_date": "20241231", "revenue": 120},
         ])
-        _, labels = TushareClient._prepare_display_periods(df)
+        _, labels = _make_client()._prepare_display_periods(df)
         assert labels[0] == "2025Q1"
 
     def test_q3_label(self):
@@ -661,13 +765,13 @@ class TestPrepareDisplayPeriods:
             {"end_date": "20250930", "revenue": 95},
             {"end_date": "20241231", "revenue": 120},
         ])
-        _, labels = TushareClient._prepare_display_periods(df)
+        _, labels = _make_client()._prepare_display_periods(df)
         assert labels[0] == "2025Q3"
 
     def test_empty_dataframe(self):
         """Empty DataFrame returns empty labels."""
         df = pd.DataFrame(columns=["end_date", "revenue"])
-        result_df, labels = TushareClient._prepare_display_periods(df)
+        result_df, labels = _make_client()._prepare_display_periods(df)
         assert labels == []
         assert result_df.empty
 
@@ -677,7 +781,7 @@ class TestPrepareDisplayPeriods:
             {"end_date": "20250930", "revenue": 95},
             {"end_date": "20250630", "revenue": 62},
         ])
-        result_df, labels = TushareClient._prepare_display_periods(df)
+        result_df, labels = _make_client()._prepare_display_periods(df)
         assert labels == ["2025Q3", "2025H1"]
         assert len(result_df) == 2
 
@@ -688,7 +792,7 @@ class TestPrepareDisplayPeriods:
             {"end_date": "20241231", "revenue": 120},  # duplicate
             {"end_date": "20231231", "revenue": 112},
         ])
-        result_df, labels = TushareClient._prepare_display_periods(df)
+        result_df, labels = _make_client()._prepare_display_periods(df)
         assert labels == ["2024", "2023"]
         assert len(result_df) == 2
 
@@ -951,6 +1055,51 @@ class TestRiskFreeRate:
             client._safe_call = MagicMock(side_effect=RuntimeError("no permission"))
             result = client.get_risk_free_rate()
         assert "无权限" in result or "数据缺失" in result
+
+    def test_rf_us_uses_treasury(self):
+        """US stocks should use US 10-year Treasury yield, not Chinese bonds."""
+        client = _make_client()
+        client._yf_available = True
+        mock_hist = pd.DataFrame(
+            {"Close": [4.21]},
+            index=pd.DatetimeIndex(["2026-03-11"]),
+        )
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = mock_hist
+        with patch("tushare_collector.yf.Ticker", return_value=mock_ticker):
+            result = client.get_risk_free_rate("AAPL.US")
+        assert "美国10年期国债收益率" in result
+        assert "4.2100" in result
+        assert "^TNX" in result
+        # Should NOT use Chinese bond source
+        assert "中债" not in result
+
+    def test_rf_us_stores_for_downstream(self):
+        """US risk-free rate should be stored in _store for §17 computation."""
+        client = _make_client()
+        client._yf_available = True
+        mock_hist = pd.DataFrame(
+            {"Close": [4.21]},
+            index=pd.DatetimeIndex(["2026-03-11"]),
+        )
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = mock_hist
+        with patch("tushare_collector.yf.Ticker", return_value=mock_ticker):
+            client.get_risk_free_rate("AAPL.US")
+        rf_df = client._store.get("risk_free_rate")
+        assert rf_df is not None
+        assert not rf_df.empty
+        assert abs(float(rf_df.iloc[0]["yield"]) - 4.21) < 0.01
+
+    def test_rf_a_share_uses_cn_bond(self):
+        """A-share stocks should still use Chinese bond curve."""
+        client = _make_client()
+        mock_df = _load_mock("yc_cb.json")
+        with patch("tushare_collector.time.sleep"):
+            client._safe_call = MagicMock(return_value=mock_df)
+            result = client.get_risk_free_rate("600887.SH")
+        assert "中债" in result
+        assert "美国" not in result
 
 
 # --- Feature #85: Share repurchase ---
@@ -1932,13 +2081,14 @@ class TestYfFillMissingHK:
         assert set(filled.columns) == set(pivoted.columns)
 
     def test_yf_exception_returns_unchanged(self):
-        """Should handle yfinance exceptions gracefully."""
+        """Should handle yfinance exceptions gracefully (retries exhausted)."""
         client = _make_client()
         client._yf_available = True
         pivoted = self._make_pivoted(missing_cols=["operate_profit"])
 
         with patch("tushare_collector.yf.Ticker", side_effect=Exception("API error")):
-            filled, yf_used = client._yf_fill_missing_hk(pivoted, "00700.HK", "income")
+            with patch("tushare_modules.yfinance_integration.time.sleep"):
+                filled, yf_used = client._yf_fill_missing_hk(pivoted, "00700.HK", "income")
 
         assert yf_used is False
         assert pd.isna(filled.at[0, "operate_profit"])
@@ -2036,6 +2186,74 @@ class TestYfFillMissingHK:
 
         assert yf_used is False
         assert set(filled.columns) == original_cols
+
+
+class TestYfFillRetryAndWarnings:
+    """Test retry logic and stderr warnings in _yf_fill_missing_hk."""
+
+    def _make_pivoted_with_nan(self):
+        return pd.DataFrame({
+            "end_date": ["20231231"],
+            "ts_code": ["00700.HK"],
+            "revenue": [660125.0],
+            "operate_profit": [float("nan")],
+        })
+
+    def _mock_yf_income(self):
+        dates = [pd.Timestamp("2023-12-31")]
+        return pd.DataFrame({
+            dates[0]: {"Operating Income": 200000.0},
+        })
+
+    def test_yf_fill_retries_on_exception(self):
+        """Should retry once after first exception and succeed on second call."""
+        client = _make_client()
+        client._yf_available = True
+        pivoted = self._make_pivoted_with_nan()
+
+        mock_ticker = MagicMock()
+        mock_ticker.income_stmt = self._mock_yf_income()
+
+        with patch("tushare_collector.yf.Ticker",
+                   side_effect=[Exception("rate limit"), mock_ticker]):
+            with patch("tushare_modules.yfinance_integration.time.sleep") as mock_sleep:
+                filled, yf_used = client._yf_fill_missing_hk(pivoted, "00700.HK", "income")
+
+        assert yf_used is True
+        assert filled.at[0, "operate_profit"] == 200000.0
+        mock_sleep.assert_called_once_with(1)
+
+    def test_yf_fill_warns_after_retries_exhausted(self, capsys):
+        """Should warn on stderr and return original after all retries fail."""
+        client = _make_client()
+        client._yf_available = True
+        pivoted = self._make_pivoted_with_nan()
+
+        with patch("tushare_collector.yf.Ticker",
+                   side_effect=Exception("API error")):
+            with patch("tushare_modules.yfinance_integration.time.sleep"):
+                filled, yf_used = client._yf_fill_missing_hk(pivoted, "00700.HK", "income")
+
+        assert yf_used is False
+        assert pd.isna(filled.at[0, "operate_profit"])
+        captured = capsys.readouterr()
+        assert "[yfinance] 00700.HK income: fallback failed after 2 retries" in captured.err
+
+    def test_yf_fill_warns_on_empty_data(self, capsys):
+        """Should warn on stderr when yfinance returns empty DataFrame."""
+        client = _make_client()
+        client._yf_available = True
+        pivoted = self._make_pivoted_with_nan()
+
+        mock_ticker = MagicMock()
+        mock_ticker.income_stmt = pd.DataFrame()
+
+        with patch("tushare_collector.yf.Ticker", return_value=mock_ticker):
+            filled, yf_used = client._yf_fill_missing_hk(pivoted, "00700.HK", "income")
+
+        assert yf_used is False
+        captured = capsys.readouterr()
+        assert "[yfinance] 00700.HK income: no data returned" in captured.err
 
 
 class TestGetPayoutByYear:
@@ -2218,3 +2436,508 @@ class TestHKHoldersYfinance:
             result = client.get_holders("00700.HK")
 
         assert "yfinance不可用" in result
+
+
+# ===== US Stock Support Tests =====
+
+
+class TestIsUS:
+    """Test _is_us static method."""
+
+    def test_us_code(self):
+        assert TushareClient._is_us("AAPL.US") is True
+
+    def test_sh_code(self):
+        assert TushareClient._is_us("600887.SH") is False
+
+    def test_hk_code(self):
+        assert TushareClient._is_us("00700.HK") is False
+
+    def test_case_insensitive(self):
+        assert TushareClient._is_us("aapl.us") is True
+
+
+class TestUSApiCode:
+    """Test _us_api_code suffix stripping."""
+
+    def test_strip_us_suffix(self):
+        assert TushareClient._us_api_code("AAPL.US") == "AAPL"
+
+    def test_strip_preserves_code(self):
+        assert TushareClient._us_api_code("GOOGL.US") == "GOOGL"
+
+
+class TestUSPivot:
+    """Test pivot with US_INCOME_MAP."""
+
+    def test_us_income_pivot(self):
+        from tushare_collector import US_INCOME_MAP
+        df = pd.DataFrame([
+            {"ts_code": "AAPL", "end_date": "20241231", "ind_name": "营业收入", "ind_value": 391035000000},
+            {"ts_code": "AAPL", "end_date": "20241231", "ind_name": "净利润", "ind_value": 93736000000},
+            {"ts_code": "AAPL", "end_date": "20231231", "ind_name": "营业收入", "ind_value": 383285000000},
+            {"ts_code": "AAPL", "end_date": "20231231", "ind_name": "净利润", "ind_value": 96995000000},
+        ])
+        result = TushareClient._pivot_hk_line_items(df, US_INCOME_MAP)
+        assert not result.empty
+        assert "revenue" in result.columns
+        assert "n_income" in result.columns
+        assert len(result) == 2
+        row_2024 = result[result["end_date"] == "20241231"].iloc[0]
+        assert row_2024["revenue"] == 391035000000
+
+
+class TestUSBasicInfo:
+    """Test US basic info."""
+
+    def test_us_basic_info_output(self):
+        client = _make_client()
+        mock_basic = _load_mock("us_basic_AAPL.json")
+        mock_daily = _load_mock("us_daily_AAPL.json")
+
+        with patch("tushare_collector.time.sleep"):
+            client._cached_basic_call = MagicMock(return_value=mock_basic)
+            client._cached_us_daily = MagicMock(return_value=mock_daily)
+            result = client.get_basic_info("AAPL.US")
+
+        assert "## 1. 基本信息" in result
+        assert "Apple" in result
+        assert "AAPL.US" in result
+
+
+class TestUSIncome:
+    """Test US income statement."""
+
+    def test_us_income_output(self):
+        client = _make_client()
+        mock_df = _load_mock("us_income_AAPL.json")
+
+        with patch("tushare_collector.time.sleep"):
+            client._safe_call = MagicMock(return_value=mock_df)
+            client._yf_available = False
+            result = client.get_income("AAPL.US")
+
+        assert "## 3. 合并利润表" in result
+        assert "百万美元" in result
+        assert "2024" in result
+        assert "2020" in result
+        # AAPL 2024 revenue: 391035000000 / 1e6 = 391,035.00
+        assert "391,035.00" in result
+        assert "营业收入" in result
+        assert "归母净利润" in result
+
+    def test_us_income_empty(self):
+        client = _make_client()
+        with patch("tushare_collector.time.sleep"):
+            client._safe_call = MagicMock(return_value=pd.DataFrame())
+            result = client.get_income("AAPL.US")
+        assert "数据缺失" in result
+
+    def test_us_income_parent_placeholder(self):
+        client = _make_client()
+        result = client.get_income_parent("AAPL.US")
+        assert "US GAAP" in result
+        assert "3P. 母公司利润表" in result
+
+
+class TestUSBalanceSheet:
+    """Test US balance sheet."""
+
+    def test_us_balance_sheet_output(self):
+        client = _make_client()
+        mock_df = _load_mock("us_balancesheet_AAPL.json")
+
+        with patch("tushare_collector.time.sleep"):
+            client._safe_call = MagicMock(return_value=mock_df)
+            client._yf_available = False
+            result = client.get_balance_sheet("AAPL.US")
+
+        assert "## 4. 合并资产负债表" in result
+        assert "百万美元" in result
+        assert "现金及等价物" in result
+        assert "总资产" in result
+        assert "股东权益" in result
+        # 2024 total_assets: 364980000000 / 1e6 = 364,980.00
+        assert "364,980.00" in result
+
+    def test_us_balance_sheet_parent_placeholder(self):
+        client = _make_client()
+        result = client.get_balance_sheet_parent("AAPL.US")
+        assert "US GAAP" in result
+        assert "4P. 母公司资产负债表" in result
+
+
+class TestUSCashflow:
+    """Test US cashflow."""
+
+    def test_us_cashflow_output(self):
+        client = _make_client()
+        mock_df = _load_mock("us_cashflow_AAPL.json")
+
+        with patch("tushare_collector.time.sleep"):
+            client._safe_call = MagicMock(return_value=mock_df)
+            client._yf_available = False
+            result = client.get_cashflow("AAPL.US")
+
+        assert "## 5. 现金流量表" in result
+        assert "百万美元" in result
+        assert "经营活动现金净额" in result
+        assert "自由现金流" in result
+        assert "c_pay_to_staff 美股不可用" in result
+        # 2024 OCF: 118254000000 / 1e6 = 118,254.00
+        assert "118,254.00" in result
+
+    def test_us_cashflow_empty(self):
+        client = _make_client()
+        with patch("tushare_collector.time.sleep"):
+            client._safe_call = MagicMock(return_value=pd.DataFrame())
+            result = client.get_cashflow("AAPL.US")
+        assert "数据缺失" in result
+
+
+class TestUSFinaIndicators:
+    """Test US financial indicators."""
+
+    def test_us_fina_indicators_output(self):
+        client = _make_client()
+        mock_df = _load_mock("us_fina_indicator_AAPL.json")
+
+        with patch("tushare_collector.time.sleep"):
+            client._safe_call = MagicMock(return_value=mock_df)
+            result = client.get_fina_indicators("AAPL.US")
+
+        assert "## 12. 关键财务指标" in result
+        assert "ROE" in result
+        assert "毛利率" in result
+        assert "160.58" in result  # ROE 2024
+        assert "46.28" in result  # gross margin 2024
+        assert "PE (TTM)" in result
+
+    def test_us_fina_indicators_empty(self):
+        client = _make_client()
+        with patch("tushare_collector.time.sleep"):
+            client._safe_call = MagicMock(return_value=pd.DataFrame())
+            result = client.get_fina_indicators("AAPL.US")
+        assert "数据缺失" in result
+
+
+class TestUSPlaceholderSections:
+    """Test US placeholder sections for unsupported data."""
+
+    def test_us_segments_placeholder(self):
+        client = _make_client()
+        result = client.get_segments("AAPL.US")
+        assert "美股暂不支持" in result
+
+    def test_us_audit_placeholder(self):
+        client = _make_client()
+        result = client.get_audit("AAPL.US")
+        assert "美股暂不支持" in result
+
+    def test_us_repurchase_placeholder(self):
+        client = _make_client()
+        result = client.get_repurchase("AAPL.US")
+        assert "美股暂不支持" in result
+
+    def test_us_pledge_not_applicable(self):
+        client = _make_client()
+        result = client.get_pledge_stat("AAPL.US")
+        assert "不适用" in result
+        assert "美股无此制度" in result
+
+
+class TestUSCurrencyAnnotation:
+    """Test USD currency detection and annotation."""
+
+    def test_detect_currency_us(self):
+        assert TushareClient._detect_currency("AAPL.US") == "USD"
+
+    def test_detect_currency_a_share(self):
+        assert TushareClient._detect_currency("600887.SH") == "CNY"
+
+    def test_us_annotation_in_data_pack(self):
+        client = _make_client()
+
+        with patch("tushare_collector.time.sleep"):
+            client._safe_call = MagicMock(return_value=pd.DataFrame())
+            client._yf_available = False
+            result = client.assemble_data_pack("AAPL.US")
+
+        assert "报表币种: USD" in result
+        assert "百万美元" in result
+
+
+class TestUSAssembly:
+    """Test full US data pack assembly."""
+
+    def test_us_assembly_section_list(self):
+        """US assembly should skip §3P and §4P."""
+        client = _make_client()
+
+        with patch("tushare_collector.time.sleep"):
+            client._safe_call = MagicMock(return_value=pd.DataFrame())
+            client._yf_available = False
+            result = client.assemble_data_pack("AAPL.US")
+
+        assert "# 数据包 — AAPL.US" in result
+        assert "报表币种: USD" in result
+        assert "百万美元" in result
+        # Core sections should be present
+        assert "1. 基本信息" in result
+        assert "3. 合并利润表" in result
+        assert "4. 合并资产负债表" in result
+        assert "5. 现金流量表" in result
+        assert "11. 十年周线行情" in result
+        # §3P and §4P should NOT be present
+        assert "3P. 母公司利润表" not in result
+        assert "4P. 母公司资产负债表" not in result
+        # US warning in §13
+        assert "美股数据覆盖有限" in result
+
+    def test_us_assembly_with_data(self):
+        """US assembly with mock data should produce complete output."""
+        client = _make_client()
+        mock_data = {
+            "us_basic": _load_mock("us_basic_AAPL.json"),
+            "us_income": _load_mock("us_income_AAPL.json"),
+            "us_balancesheet": _load_mock("us_balancesheet_AAPL.json"),
+            "us_cashflow": _load_mock("us_cashflow_AAPL.json"),
+            "us_fina_indicator": _load_mock("us_fina_indicator_AAPL.json"),
+            "us_daily": _load_mock("us_daily_AAPL.json"),
+        }
+
+        def mock_safe_call(api_name, **kwargs):
+            if api_name in mock_data:
+                return mock_data[api_name]
+            return pd.DataFrame()
+
+        with patch("tushare_collector.time.sleep"):
+            client._safe_call = MagicMock(side_effect=mock_safe_call)
+            client._cached_basic_call = MagicMock(side_effect=lambda name, **kw: mock_data.get(name, pd.DataFrame()))
+            client._cached_us_daily = MagicMock(return_value=mock_data["us_daily"])
+            client._yf_available = False
+            result = client.assemble_data_pack("AAPL.US")
+
+        assert "Apple" in result
+        assert "391,035.00" in result  # income revenue
+        assert "364,980.00" in result  # total assets
+        assert "118,254.00" in result  # OCF
+
+
+class TestYfTickerUS:
+    """Test yfinance ticker conversion for US stocks."""
+
+    def test_yf_ticker_us(self):
+        assert TushareClient._yf_ticker("AAPL.US") == "AAPL"
+
+    def test_yf_ticker_us_multi_letter(self):
+        assert TushareClient._yf_ticker("GOOGL.US") == "GOOGL"
+
+
+# --- Fiscal Year Detection ---
+
+class TestFiscalYearDetection:
+    """Tests for TushareClient._detect_fy_end_month."""
+
+    def test_detect_calendar_year(self):
+        """Data with 1231 dates should detect month=12."""
+        client = _make_client()
+        df = pd.DataFrame([
+            {"end_date": "20241231", "revenue": 100},
+            {"end_date": "20231231", "revenue": 90},
+            {"end_date": "20221231", "revenue": 80},
+            {"end_date": "20211231", "revenue": 70},
+            {"end_date": "20201231", "revenue": 60},
+        ])
+        assert client._detect_fy_end_month(df) == 12
+
+    def test_detect_september_fy(self):
+        """AAPL-like data with Sep dates should detect month=9."""
+        client = _make_client()
+        df = pd.DataFrame([
+            {"end_date": "20240928", "revenue": 100},
+            {"end_date": "20230930", "revenue": 90},
+            {"end_date": "20220924", "revenue": 80},
+            {"end_date": "20210925", "revenue": 70},
+            {"end_date": "20200926", "revenue": 60},
+        ])
+        assert client._detect_fy_end_month(df) == 9
+
+    def test_detect_march_fy(self):
+        """Data with March end dates should detect month=3."""
+        client = _make_client()
+        df = pd.DataFrame([
+            {"end_date": "20240331", "revenue": 100},
+            {"end_date": "20230331", "revenue": 90},
+            {"end_date": "20220331", "revenue": 80},
+        ])
+        assert client._detect_fy_end_month(df) == 3
+
+    def test_empty_df_fallback(self):
+        """Empty DataFrame should return default month=12."""
+        client = _make_client()
+        df = pd.DataFrame(columns=["end_date", "revenue"])
+        assert client._detect_fy_end_month(df) == 12
+
+    def test_no_end_date_column_fallback(self):
+        """DataFrame without end_date column should return default month=12."""
+        client = _make_client()
+        df = pd.DataFrame([{"revenue": 100}])
+        assert client._detect_fy_end_month(df) == 12
+
+
+class TestPrepareDisplayPeriodsNonCalendarFY:
+    """Tests for _prepare_display_periods with non-calendar fiscal years."""
+
+    def test_september_fy_annual_detection(self):
+        """Sep FY data: periods ending in 09 should be treated as annual."""
+        client = _make_client()
+        client._fy_end_month = 9
+        df = pd.DataFrame([
+            {"end_date": "20240928", "revenue": 100},
+            {"end_date": "20230930", "revenue": 90},
+            {"end_date": "20220924", "revenue": 80},
+            {"end_date": "20210925", "revenue": 70},
+            {"end_date": "20200926", "revenue": 60},
+        ])
+        result_df, labels = client._prepare_display_periods(df)
+        assert len(result_df) == 5
+        # All should be year labels (annual), not Q3/H1
+        for label in labels:
+            assert "Q" not in label
+            assert "H" not in label
+
+    def test_september_fy_with_interim(self):
+        """Sep FY: interim data newer than latest annual should be included."""
+        client = _make_client()
+        client._fy_end_month = 9
+        df = pd.DataFrame([
+            {"end_date": "20250331", "revenue": 50},  # interim
+            {"end_date": "20240928", "revenue": 100},  # annual
+            {"end_date": "20230930", "revenue": 90},   # annual
+        ])
+        result_df, labels = client._prepare_display_periods(df)
+        assert len(result_df) == 3
+        assert labels[0] == "2025Q1"
+        assert labels[1] == "2024"
+        assert labels[2] == "2023"
+
+
+class TestUnitLabelHelpers:
+    """Tests for _unit_label and _price_unit helpers."""
+
+    def test_cny_defaults(self):
+        client = _make_client()
+        assert client._unit_label() == "百万元"
+        assert client._price_unit() == "元"
+
+    def test_hkd_labels(self):
+        client = _make_client()
+        client._currency = "HKD"
+        assert client._unit_label() == "百万港元"
+        assert client._price_unit() == "港元"
+
+    def test_usd_labels(self):
+        client = _make_client()
+        client._currency = "USD"
+        assert client._unit_label() == "百万美元"
+        assert client._price_unit() == "美元"
+
+
+class TestUSTotalMvUnit:
+    """Tests for US total_mv unit handling in basic info display."""
+
+    def test_us_basic_info_total_mv_divider(self):
+        """total_mv should be divided by 1e6 for display as 百万美元."""
+        client = _make_client()
+        mock_basic = pd.DataFrame([{
+            "ts_code": "AAPL", "name": "Apple Inc", "enname": "Apple Inc.",
+            "market": "NASDAQ", "list_date": "19801212",
+        }])
+        mock_daily = pd.DataFrame([{
+            "ts_code": "AAPL", "trade_date": "20241231",
+            "close": 254.49, "pe": 32.5, "pb": 48.2,
+            "total_mv": 3834612000000,  # raw USD
+        }])
+
+        with patch("tushare_collector.time.sleep"):
+            client._cached_basic_call = MagicMock(return_value=mock_basic)
+            client._cached_us_daily = MagicMock(return_value=mock_daily)
+            result = client._get_basic_info_us("AAPL.US")
+
+        # Should show ~3,834,612.00 (百万美元), NOT 3,834,612,000,000
+        assert "3,834,612.00" in result
+        assert "3,834,612,000,000" not in result
+
+
+class TestUSFYDetectionBeforeYFFill:
+    """Verify FY detection runs before yfinance fill in _get_income_us()."""
+
+    def test_fy_detection_before_yf_fill(self):
+        """Ensure _detect_fy_end_month is called BEFORE _yf_fill_missing_hk
+        so the fallback date match in yfinance fill uses the correct month."""
+        client = _make_client()
+        client._yf_available = True
+
+        # Tushare returns income data with September end_dates (Chinese ind_names)
+        mock_income = pd.DataFrame([
+            {"ts_code": "AAPL", "end_date": "20240928", "ind_name": "营业收入", "ind_value": 391035000000},
+            {"ts_code": "AAPL", "end_date": "20230930", "ind_name": "营业收入", "ind_value": 383285000000},
+        ])
+
+        call_order = []
+
+        original_detect = client._detect_fy_end_month
+        original_yf_fill = client._yf_fill_missing_hk
+
+        def tracking_detect(df):
+            call_order.append("detect_fy")
+            return original_detect(df)
+
+        def tracking_yf_fill(pivoted, ts_code, stmt_type):
+            call_order.append("yf_fill")
+            return pivoted, False  # skip actual yfinance call
+
+        with patch("tushare_collector.time.sleep"):
+            client._safe_call = MagicMock(return_value=mock_income)
+            client._detect_fy_end_month = tracking_detect
+            client._yf_fill_missing_hk = tracking_yf_fill
+            client._get_income_us("AAPL.US")
+
+        assert "detect_fy" in call_order
+        assert "yf_fill" in call_order
+        assert call_order.index("detect_fy") < call_order.index("yf_fill"), \
+            "FY detection must run before yfinance fill"
+
+    def test_yf_fill_uses_detected_fy_month(self):
+        """After FY detection sets _fy_end_month=9, yfinance fallback match
+        should succeed for dates like 20240928 (month 09 == fy_end_month 9)."""
+        client = _make_client()
+        client._yf_available = True
+
+        # Simulate: Tushare has revenue but missing operate_profit
+        pivoted = pd.DataFrame([
+            {"end_date": "20240928", "revenue": 391035.0, "operate_profit": float("nan")},
+            {"end_date": "20230930", "revenue": 383285.0, "operate_profit": 114301.0},
+        ])
+
+        # Set fy_end_month=9 (as would be detected from September end_dates)
+        client._fy_end_month = 9
+
+        # Mock yfinance with September 30 dates
+        yf_income = pd.DataFrame(
+            {"2024-09-30": [120000.0], "2023-09-30": [114301.0]},
+            index=["Operating Income"],
+        )
+        yf_income.columns = pd.to_datetime(yf_income.columns)
+
+        mock_ticker = MagicMock()
+        mock_ticker.income_stmt = yf_income
+
+        with patch("tushare_collector.yf") as mock_yf:
+            mock_yf.Ticker.return_value = mock_ticker
+            filled, yf_used = client._yf_fill_missing_hk(pivoted, "AAPL.US", "income")
+
+        assert yf_used
+        # 20240928 should have been matched to 2024-09-30 via fallback
+        assert filled.iloc[0]["operate_profit"] == 120000.0
