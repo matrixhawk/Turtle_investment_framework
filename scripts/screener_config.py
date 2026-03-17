@@ -69,6 +69,12 @@ class ScreenerConfig:
     min_gross_margin: float = 15.0   # %
     max_debt_ratio: float = 70.0     # %
 
+    # --- Tier 2: Observation channel quality (relaxed vs main) ---
+    min_roe_obs: float = 0.0                # vs 8% for main channel
+    min_fcf_margin_obs: float = 0.0         # FCF/Revenue >= 0%
+    min_fcf_positive_years_obs: int = 2     # FCF positive in >= 2 of 5 years
+    obs_require_ocf_positive: bool = True   # Latest year OCF > 0
+
     # --- Scoring weights ---
     weight_roe: float = 0.20
     weight_fcf_yield: float = 0.20
@@ -118,6 +124,8 @@ class ScreenerConfig:
             errors.append("tier2_main_limit must be >= 1")
         if self.obs_channel_limit < 0:
             errors.append("obs_channel_limit must be >= 0")
+        if self.min_fcf_positive_years_obs < 0 or self.min_fcf_positive_years_obs > 5:
+            errors.append("min_fcf_positive_years_obs must be 0-5")
         return errors
 
     def to_dict(self) -> dict[str, Any]:

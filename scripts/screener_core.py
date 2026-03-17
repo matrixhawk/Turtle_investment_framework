@@ -43,7 +43,7 @@ def _get_tushare_client_class():
 # ============================================================
 
 _TIER2_FIELDS = {
-    "income": "ts_code,end_date,n_income_attr_p,operate_profit,finance_exp,non_oper_income,oth_income,asset_disp_income",
+    "income": "ts_code,end_date,n_income_attr_p,operate_profit,finance_exp,non_oper_income,oth_income,asset_disp_income,revenue",
     "balancesheet": ("ts_code,end_date,money_cap,trad_asset,st_borr,lt_borr,"
                      "bond_payable,non_cur_liab_due_1y,goodwill,total_assets,"
                      "total_hldr_eqy_exc_min_int"),
@@ -496,18 +496,114 @@ class TushareScreener:
         metrics["debt_to_assets"] = float(debt) if debt is not None and debt == debt else None
         metrics["profit_dedt"] = float(profit_dedt) if profit_dedt is not None and profit_dedt == profit_dedt else None
 
-        # Observation channel: check profit_dedt
+        # Observation channel: FCF-based quality gates
         if channel == "observation":
-            if metrics["profit_dedt"] is None or metrics["profit_dedt"] <= 0:
-                return False, metrics
+            return self._check_obs_quality(ts_code, metrics, cfg)
 
-        # Financial quality checks
+        # Financial quality checks (main channel)
         if metrics["roe_waa"] is not None and metrics["roe_waa"] < cfg.min_roe:
             return False, metrics
         if metrics["gross_margin"] is not None and metrics["gross_margin"] < cfg.min_gross_margin:
             return False, metrics
         if metrics["debt_to_assets"] is not None and metrics["debt_to_assets"] > cfg.max_debt_ratio:
             return False, metrics
+
+        return True, metrics
+
+    def _check_obs_quality(self, ts_code: str, metrics: dict[str, Any],
+                           cfg: "ScreenerConfig") -> tuple[bool, dict[str, Any]]:
+        """Observation-channel quality check: FCF-based signals.
+
+        Gates:
+        1. ROE >= min_roe_obs (default 0%, relaxed from 8%)
+        2. Gross margin >= min_gross_margin (same as main, 15%)
+        3. Debt ratio <= max_debt_ratio (same as main, 70%)
+        4. OCF > 0 (if obs_require_ocf_positive)
+        5. FCF margin (FCF/Revenue) >= min_fcf_margin_obs (default 0%)
+        6. FCF positive years >= min_fcf_positive_years_obs (default 2 of 5)
+        """
+        # Gate 1: Relaxed ROE
+        if metrics["roe_waa"] is not None and metrics["roe_waa"] < cfg.min_roe_obs:
+            return False, metrics
+
+        # Gate 2: Gross margin (same as main)
+        if metrics["gross_margin"] is not None and metrics["gross_margin"] < cfg.min_gross_margin:
+            return False, metrics
+
+        # Gate 3: Debt ratio (same as main)
+        if metrics["debt_to_assets"] is not None and metrics["debt_to_assets"] > cfg.max_debt_ratio:
+            return False, metrics
+
+        # Fetch cashflow and income for FCF-based gates
+        # (cached: will be reused by Factor 2/4 later, zero extra API calls)
+        try:
+            cf_df = self._cached_call("cashflow", ts_code=ts_code)
+            income_df = self._cached_call("income", ts_code=ts_code,
+                                          report_type="1")
+        except Exception:
+            return False, metrics
+
+        if cf_df.empty:
+            return False, metrics
+
+        def _sf(val):
+            if val is None:
+                return None
+            try:
+                f = float(val)
+                return None if f != f else f
+            except (TypeError, ValueError):
+                return None
+
+        cf_sorted = cf_df.sort_values("end_date", ascending=False)
+        annual_cf = cf_sorted[cf_sorted["end_date"].str.endswith("1231")]
+
+        if annual_cf.empty:
+            return False, metrics
+
+        latest_cf = annual_cf.iloc[0]
+        ocf = _sf(latest_cf.get("n_cashflow_act"))
+        capex = _sf(latest_cf.get("c_pay_acq_const_fiolta"))
+
+        # Gate 4: OCF positive
+        if cfg.obs_require_ocf_positive:
+            if ocf is None or ocf <= 0:
+                return False, metrics
+
+        # Compute FCF (raw yuan)
+        ocf_val = ocf if ocf is not None else 0
+        capex_val = abs(capex) if capex is not None else 0
+        fcf = ocf_val - capex_val
+
+        # Gate 5: FCF margin = FCF / Revenue * 100 (both in raw yuan)
+        revenue = None
+        if not income_df.empty:
+            inc_sorted = income_df.sort_values("end_date", ascending=False)
+            annual_inc = inc_sorted[inc_sorted["end_date"].str.endswith("1231")]
+            if not annual_inc.empty:
+                revenue = _sf(annual_inc.iloc[0].get("revenue"))
+
+        if revenue is not None and revenue > 0:
+            fcf_margin = fcf / revenue * 100
+            metrics["fcf_margin"] = fcf_margin
+            if fcf_margin < cfg.min_fcf_margin_obs:
+                return False, metrics
+        else:
+            return False, metrics
+
+        # Gate 6: FCF consistency (positive years out of 5)
+        fcf_list = []
+        for _, r in annual_cf.head(5).iterrows():
+            o = _sf(r.get("n_cashflow_act"))
+            c = _sf(r.get("c_pay_acq_const_fiolta"))
+            if o is not None and c is not None:
+                fcf_list.append(o - abs(c))
+
+        if fcf_list:
+            positive_years = sum(1 for f in fcf_list if f > 0)
+            metrics["fcf_positive_years"] = positive_years
+            if positive_years < cfg.min_fcf_positive_years_obs:
+                return False, metrics
 
         return True, metrics
 
@@ -723,10 +819,14 @@ class TushareScreener:
                 fin_exp = _sf(latest.get("finance_exp"))
                 np_parent = _sf(latest.get("n_income_attr_p"))
 
+                rev_raw = _sf(latest.get("revenue"))
+
                 if oper_profit is not None:
                     result["oper_profit"] = oper_profit / 1e6
                 if np_parent is not None:
                     result["np_parent"] = np_parent / 1e6
+                if rev_raw is not None and rev_raw > 0:
+                    result["revenue"] = rev_raw / 1e6  # 百万元
 
         # Process balance sheet
         if not bs_df.empty:
@@ -791,6 +891,12 @@ class TushareScreener:
             result["fcf_positive_years"] = sum(1 for f in fcf_list if f > 0)
             result["fcf_total_years"] = len(fcf_list)
             result["fcf_consistency"] = result["fcf_positive_years"] / result["fcf_total_years"]
+
+        # FCF margin = FCF / Revenue * 100 (both in 百万元)
+        rev = result.get("revenue")
+        fcf_val = result.get("fcf")
+        if rev is not None and rev > 0 and fcf_val is not None:
+            result["fcf_margin"] = fcf_val / rev * 100
 
         # Compute composite metrics
         oper_profit = result.get("oper_profit")
@@ -991,6 +1097,7 @@ class TushareScreener:
         result["net_debt_ebitda"] = f4.get("net_debt_ebitda")
         result["goodwill_ratio"] = f4.get("goodwill_ratio")
         result["fcf_consistency"] = f4.get("fcf_consistency")
+        result["fcf_margin"] = f4.get("fcf_margin")
 
         # Step 5: Floor price
         fp = self._extract_floor_price(ts_code, close, total_mv_wan)
@@ -1118,8 +1225,8 @@ class TushareScreener:
         # Select display columns
         display_cols = [c for c in [
             "ts_code", "name", "industry", "close", "pe_ttm", "pb", "dv_ttm",
-            "roe_waa", "gross_margin", "fcf_yield", "R", "ev_ebitda",
-            "floor_premium", "composite_score"
+            "roe_waa", "gross_margin", "fcf_yield", "fcf_margin", "R",
+            "ev_ebitda", "floor_premium", "composite_score"
         ] if c in df.columns]
 
         display_df = df[display_cols].copy()
@@ -1231,7 +1338,7 @@ def main():
     # Display top results
     display_cols = [c for c in [
         "ts_code", "name", "industry", "composite_score", "roe_waa",
-        "fcf_yield", "R", "ev_ebitda", "floor_premium"
+        "fcf_yield", "fcf_margin", "R", "ev_ebitda", "floor_premium"
     ] if c in result.columns]
     print("\n" + result[display_cols].head(20).to_string(index=False))
 

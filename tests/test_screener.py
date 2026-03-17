@@ -52,6 +52,11 @@ class TestScreenerConfig:
         assert cfg.cache_tier2_financial_ttl_hours == 168
         assert cfg.cache_tier2_market_ttl_hours == 24
         assert cfg.cache_tier2_global_ttl_hours == 24
+        # Observation channel quality params
+        assert cfg.min_roe_obs == 0.0
+        assert cfg.min_fcf_margin_obs == 0.0
+        assert cfg.min_fcf_positive_years_obs == 2
+        assert cfg.obs_require_ocf_positive is True
 
     def test_scoring_weights_sum_to_one(self):
         cfg = ScreenerConfig()
@@ -689,17 +694,91 @@ class TestTier2FinancialQuality:
         passed, metrics = screener._check_financial_quality("A.SH")
         assert not passed
 
-    def test_observation_channel_positive_dedt_passes(self, tmp_path):
-        screener = _make_screener(tmp_path)
-        screener._safe_call = MagicMock(return_value=self._make_fina_df(profit_dedt=5e7))
-        passed, _ = screener._check_financial_quality("A.SH", channel="observation")
-        assert passed
+    def _make_obs_mock(self, fina_df, cf_df, income_df):
+        """Create a mock _safe_call that routes by API name for observation tests."""
+        def _mock(api_name, **kwargs):
+            if api_name == "fina_indicator":
+                return fina_df
+            if api_name == "cashflow":
+                return cf_df
+            if api_name == "income":
+                return income_df
+            return pd.DataFrame()
+        return _mock
 
-    def test_observation_channel_negative_dedt_fails(self, tmp_path):
+    def test_observation_channel_fcf_quality_passes(self, tmp_path):
+        """Obs channel passes with positive OCF, FCF margin, and FCF consistency."""
         screener = _make_screener(tmp_path)
-        screener._safe_call = MagicMock(return_value=self._make_fina_df(profit_dedt=-1e7))
+        fina_df = self._make_fina_df(roe=2.0, gm=20.0, debt=50.0, profit_dedt=-1e7)
+        cf_df = pd.DataFrame({
+            "ts_code": ["A.SH"] * 5,
+            "end_date": ["20251231", "20241231", "20231231", "20221231", "20211231"],
+            "n_cashflow_act": [5e9, 4e9, 3e9, 2e9, 1e9],
+            "c_pay_acq_const_fiolta": [2e9, 1.5e9, 1e9, 1e9, 0.5e9],
+        })
+        income_df = pd.DataFrame({
+            "ts_code": ["A.SH"], "end_date": ["20251231"],
+            "revenue": [20e9],
+        })
+        screener._safe_call = self._make_obs_mock(fina_df, cf_df, income_df)
+        passed, metrics = screener._check_financial_quality("A.SH", channel="observation")
+        assert passed
+        assert metrics.get("fcf_margin") is not None
+        assert metrics["fcf_margin"] > 0
+
+    def test_observation_channel_negative_ocf_fails(self, tmp_path):
+        """Obs channel fails when OCF is negative."""
+        screener = _make_screener(tmp_path)
+        fina_df = self._make_fina_df(roe=2.0, gm=20.0, debt=50.0)
+        cf_df = pd.DataFrame({
+            "ts_code": ["A.SH"],
+            "end_date": ["20251231"],
+            "n_cashflow_act": [-1e9],
+            "c_pay_acq_const_fiolta": [5e8],
+        })
+        income_df = pd.DataFrame({
+            "ts_code": ["A.SH"], "end_date": ["20251231"],
+            "revenue": [10e9],
+        })
+        screener._safe_call = self._make_obs_mock(fina_df, cf_df, income_df)
         passed, _ = screener._check_financial_quality("A.SH", channel="observation")
         assert not passed
+
+    def test_observation_channel_low_fcf_consistency_fails(self, tmp_path):
+        """Obs channel fails when FCF is positive in < 2 of 5 years."""
+        screener = _make_screener(tmp_path)
+        fina_df = self._make_fina_df(roe=2.0, gm=20.0, debt=50.0)
+        cf_df = pd.DataFrame({
+            "ts_code": ["A.SH"] * 5,
+            "end_date": ["20251231", "20241231", "20231231", "20221231", "20211231"],
+            "n_cashflow_act": [5e9, -1e9, -2e9, -1e9, -3e9],
+            "c_pay_acq_const_fiolta": [2e9, 1e9, 1e9, 1e9, 1e9],
+        })
+        income_df = pd.DataFrame({
+            "ts_code": ["A.SH"], "end_date": ["20251231"],
+            "revenue": [20e9],
+        })
+        screener._safe_call = self._make_obs_mock(fina_df, cf_df, income_df)
+        passed, _ = screener._check_financial_quality("A.SH", channel="observation")
+        assert not passed  # Only 1 of 5 years has positive FCF < min 2
+
+    def test_observation_channel_negative_fcf_margin_fails(self, tmp_path):
+        """Obs channel fails when FCF margin is negative (capex > OCF)."""
+        screener = _make_screener(tmp_path)
+        fina_df = self._make_fina_df(roe=2.0, gm=20.0, debt=50.0)
+        cf_df = pd.DataFrame({
+            "ts_code": ["A.SH"] * 3,
+            "end_date": ["20251231", "20241231", "20231231"],
+            "n_cashflow_act": [3e9, 2e9, 2e9],
+            "c_pay_acq_const_fiolta": [5e9, 4e9, 3e9],
+        })
+        income_df = pd.DataFrame({
+            "ts_code": ["A.SH"], "end_date": ["20251231"],
+            "revenue": [20e9],
+        })
+        screener._safe_call = self._make_obs_mock(fina_df, cf_df, income_df)
+        passed, _ = screener._check_financial_quality("A.SH", channel="observation")
+        assert not passed  # FCF margin = (3e9 - 5e9) / 20e9 = -10% < 0%
 
     def test_empty_data_fails(self, tmp_path):
         screener = _make_screener(tmp_path)
@@ -924,6 +1003,51 @@ class TestFactor4Metrics:
         result = screener._extract_factor4_metrics("A.SH", close=100.0,
                                                     total_mv_wan=2e7)
         assert result.get("fcf_consistency") == 1.0  # all 5 years positive
+
+    def test_fcf_margin_computation(self, tmp_path):
+        """FCF margin = (OCF - Capex) / Revenue * 100."""
+        screener = _make_screener(tmp_path)
+        inc, bs, cf = self._make_mock_data()
+        # Add revenue to income mock
+        inc["revenue"] = [10e9]  # 10 billion yuan
+
+        def _mock_call(api_name, **kwargs):
+            if api_name == "income":
+                return inc
+            if api_name == "balancesheet":
+                return bs
+            if api_name == "cashflow":
+                return cf
+            return pd.DataFrame()
+
+        screener._safe_call = _mock_call
+        result = screener._extract_factor4_metrics("A.SH", close=100.0,
+                                                    total_mv_wan=2e7)
+        # FCF = OCF(6e9) - Capex(2e9) = 4e9 → 4000 百万元
+        # Revenue = 10e9 → 10000 百万元
+        # FCF margin = 4000 / 10000 * 100 = 40%
+        assert result.get("fcf_margin") is not None
+        assert abs(result["fcf_margin"] - 40.0) < 0.1
+
+    def test_fcf_margin_no_revenue(self, tmp_path):
+        """FCF margin is None when revenue is not available."""
+        screener = _make_screener(tmp_path)
+        inc, bs, cf = self._make_mock_data()
+        # No revenue column in income mock
+
+        def _mock_call(api_name, **kwargs):
+            if api_name == "income":
+                return inc
+            if api_name == "balancesheet":
+                return bs
+            if api_name == "cashflow":
+                return cf
+            return pd.DataFrame()
+
+        screener._safe_call = _mock_call
+        result = screener._extract_factor4_metrics("A.SH", close=100.0,
+                                                    total_mv_wan=2e7)
+        assert result.get("fcf_margin") is None
 
     def test_goodwill_ratio(self, tmp_path):
         screener = _make_screener(tmp_path)
