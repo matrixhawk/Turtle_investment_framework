@@ -23,7 +23,7 @@ python3 scripts/tushare_collector.py --code $ARGUMENTS --output output/{code}_{c
   - If found → use the existing PDF, skip download
   - If only older fiscal year PDFs exist → proceed to download the latest
 - If user provided a PDF path or URL → use it directly
-- If no matching PDF found and no PDF provided → use `/download-report {stock_code}` to search and download the latest annual report (年报)
+- If no matching PDF found and no PDF provided → use `/download-annual-report {stock_code}` to search and download the latest annual report (年报)
   - Download target: output/{code}_{company}/
   - If download fails after retries → fallback to WebSearch (Step 1C)
 - Read PDF using Read tool: first read table of contents (pages 1-5), then read key sections by priority:

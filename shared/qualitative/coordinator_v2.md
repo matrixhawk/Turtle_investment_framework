@@ -67,7 +67,7 @@ python3 scripts/tushare_collector.py --code {ts_code} --output {output_dir}/data
 
 **PDF 获取优先级**：
 1. 用户已提供 PDF 路径/URL → 直接使用
-2. 用户未提供 PDF → 使用 `/download-report {stock_code}` 搜索并下载最新年报（或中报）
+2. 用户未提供 PDF → 使用 `/download-annual-report {stock_code}` 搜索并下载最新年报（或中报）
    - 下载目标目录：`{output_dir}/`
    - 下载失败（重试后仍失败）→ fallback 到 WebSearch（Step 1C-fallback）
 

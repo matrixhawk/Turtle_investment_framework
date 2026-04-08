@@ -330,7 +330,7 @@ mkdir -p {workspace}/output/{code}_{company}
 PDF 下载最多重试 **3次**（指数退避：3s / 6s / 9s）。3次均失败：
 - 在 §13 中生成 `[数据缺失|中] PDF年报下载失败，已使用3次重试`
 - 进入无 PDF 模式（跳过 Phase 2，Phase 3 使用降级方案）
-- 不尝试替代 URL（仅使用 `/download-report` 返回的首选 URL）
+- 不尝试替代 URL（仅使用 `/download-annual-report` 返回的首选 URL）
 
 ---
 
