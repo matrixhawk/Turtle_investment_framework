@@ -18,10 +18,12 @@ python3 scripts/tushare_collector.py --code $ARGUMENTS --output output/{code}_{c
 ```
 
 **1B: PDF acquisition and loading**
-- First check if a PDF already exists in output/{code}_{company}/ (glob for `*年报*.pdf` or `*annual*.pdf`)
+- Determine the latest fiscal year: `latest_fiscal_year` = current calendar year − 1 (e.g., in 2026 → FY2025)
+- Check if a PDF for the latest fiscal year already exists in output/{code}_{company}/ (glob for `*{latest_fiscal_year}*年报*.pdf` or `*{latest_fiscal_year}*年度报告*.pdf` or `*{latest_fiscal_year}*annual*.pdf`)
   - If found → use the existing PDF, skip download
+  - If only older fiscal year PDFs exist → proceed to download the latest
 - If user provided a PDF path or URL → use it directly
-- If no PDF found and no PDF provided → use `/download-report {stock_code}` to search and download the latest annual report (年报) or interim report (中报)
+- If no matching PDF found and no PDF provided → use `/download-report {stock_code}` to search and download the latest annual report (年报)
   - Download target: output/{code}_{company}/
   - If download fails after retries → fallback to WebSearch (Step 1C)
 - Read PDF using Read tool: first read table of contents (pages 1-5), then read key sections by priority:
